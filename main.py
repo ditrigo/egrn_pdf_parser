@@ -4,7 +4,7 @@ import argparse
 import logging
 import os
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from PyQt5 import QtWidgets
 
@@ -79,18 +79,6 @@ def parse_arguments() -> argparse.Namespace:
         help='Путь к выходному XLSX файлу (по умолчанию: output/restrict_records.xlsx).'
     )
     parser.add_argument(
-        '--special_output_csv',
-        type=str,
-        default='output/special_restrict_records.csv',  # Стандартный путь для специальных записей
-        help='Путь к выходному CSV файлу для специальных записей (по умолчанию: output/special_restrict_records.csv).'
-    )
-    parser.add_argument(
-        '--special_output_xlsx',
-        type=str,
-        default='output/special_restrict_records.xlsx',  # Стандартный путь для специальных записей
-        help='Путь к выходному XLSX файлу для специальных записей (по умолчанию: output/special_restrict_records.xlsx).'
-    )
-    parser.add_argument(
         '--log_file',
         type=str,
         default='parser.log',  # Стандартный файл логов
@@ -99,34 +87,51 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_cli(args: argparse.Namespace) -> None:
+def setup_logging(log_file: str) -> None:
     """
-    Запуск парсера в CLI-режиме.
+    Настройка логирования для приложения.
     """
-    # Настройка логирования
-    logging.basicConfig(
-        filename=args.log_file,
-        filemode='a',
-        format='%(asctime)s %(levelname)s:%(message)s',
-        level=logging.INFO
-    )
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s %(levelname)s:%(message)s')
-    console.setFormatter(formatter)
-    logging.getLogger('').addHandler(console)
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
 
-    logging.info("Запуск парсера в CLI-режиме.")
+    # Форматтер
+    formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
-    # Настройка параметров подключения к базе данных
-    db_config = {}
+    # Файловый обработчик
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # Консольный обработчик
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+
+def create_output_directories(paths: list) -> None:
+    """
+    Создаёт необходимые директории для выходных файлов, если они не существуют.
+    """
+    for path in paths:
+        dir_name = os.path.dirname(path)
+        if dir_name and not os.path.exists(dir_name):
+            logging.info(f"Создание директории для {path}: {dir_name}")
+            os.makedirs(dir_name, exist_ok=True)
+
+
+def get_db_config(args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Формирует конфигурацию базы данных на основе аргументов.
+    """
     if args.db_type == 'postgres':
         required_fields = ['db_host', 'db_port', 'db_name', 'db_user', 'db_password']
         missing = [field for field in required_fields if not getattr(args, field)]
         if missing:
             logging.error(f"Отсутствуют необходимые параметры для PostgreSQL: {', '.join(missing)}")
             sys.exit(1)
-        db_config = {
+        return {
             'type': 'postgres',
             'host': args.db_host,
             'port': args.db_port,
@@ -135,31 +140,36 @@ def run_cli(args: argparse.Namespace) -> None:
             'password': args.db_password
         }
     elif args.db_type == 'sqlite':
-        db_config = {
+        return {
             'type': 'sqlite',
             'sqlite_path': args.sqlite_path or 'egrn_database.sqlite'
         }
+    else:
+        logging.error("Unsupported database type.")
+        sys.exit(1)
 
-    # Убедитесь, что директория xml_directory существует
-    if not os.path.isdir(args.xml_directory):
-        logging.info(f"Директория {args.xml_directory} не существует. Создание...")
-        os.makedirs(args.xml_directory, exist_ok=True)
 
-    # Убедитесь, что директории для выходных файлов существуют
-    for path in [args.output_csv, args.output_xlsx, args.special_output_csv, args.special_output_xlsx, args.log_file]:
-        dir_name = os.path.dirname(path)
-        if dir_name and not os.path.exists(dir_name):
-            logging.info(f"Создание директории для {path}: {dir_name}")
-            os.makedirs(dir_name, exist_ok=True)
+def run_cli(args: argparse.Namespace) -> None:
+    """
+    Запуск парсера в CLI-режиме.
+    """
+    logging.info("Запуск парсера в CLI-режиме.")
+
+    # Формирование конфигурации базы данных
+    db_config = get_db_config(args)
+
+    # Создание необходимых директорий
+    create_output_directories([
+        args.output_csv, args.output_xlsx,
+        args.log_file
+    ])
 
     try:
         parser = EGRNParser(
-            # db_config=db_config,
+            db_config=db_config,
             xml_directory=args.xml_directory,
             output_csv=args.output_csv,
             output_xlsx=args.output_xlsx,
-            special_output_csv=args.special_output_csv,
-            special_output_xlsx=args.special_output_xlsx,
             log_file=args.log_file
         )
         parser.run()
@@ -183,9 +193,11 @@ def main():
     """
     Основная функция, которая определяет режим работы приложения.
     """
+    args = parse_arguments()
+    # setup_logging(args.log_file)
+
     if len(sys.argv) > 1:
         # Режим CLI
-        args = parse_arguments()
         run_cli(args)
     else:
         # Режим GUI

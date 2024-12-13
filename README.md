@@ -54,6 +54,9 @@ python main.py \
     --max_workers 4
 ```
 
+```bash
+python3 parser.py     --db_type sqlite     --sqlite_path ./data/egrn_database.sqlite     --xml_directory ./xml_files     --output_csv ./output/restrict_records.csv     --output_xlsx ./output/restrict_records.xlsx     --log_file ./logs/parser.log
+```
 ### CLI-Режим
 
 ```bash

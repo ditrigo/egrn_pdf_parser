@@ -1,8 +1,8 @@
 # gui.py
 
-import sys
 import os
 import logging
+import sys
 from PyQt5 import QtWidgets, QtCore
 
 from parser import EGRNParser
@@ -84,24 +84,6 @@ class ParserApp(QtWidgets.QWidget):
         xlsx_hbox.addWidget(self.output_xlsx)
         xlsx_hbox.addWidget(self.xlsx_browse)
 
-        self.special_output_csv_label = QtWidgets.QLabel('Выходной CSV файл для специальных записей:')
-        self.special_output_csv = QtWidgets.QLineEdit('output/special_restrict_records.csv')  # Стандартный путь
-        self.special_csv_browse = QtWidgets.QPushButton('Обзор')
-        self.special_csv_browse.clicked.connect(self.browse_special_output_csv)
-
-        special_csv_hbox = QtWidgets.QHBoxLayout()
-        special_csv_hbox.addWidget(self.special_output_csv)
-        special_csv_hbox.addWidget(self.special_csv_browse)
-
-        self.special_output_xlsx_label = QtWidgets.QLabel('Выходной XLSX файл для специальных записей:')
-        self.special_output_xlsx = QtWidgets.QLineEdit('output/special_restrict_records.xlsx')  # Стандартный путь
-        self.special_xlsx_browse = QtWidgets.QPushButton('Обзор')
-        self.special_xlsx_browse.clicked.connect(self.browse_special_output_xlsx)
-
-        special_xlsx_hbox = QtWidgets.QHBoxLayout()
-        special_xlsx_hbox.addWidget(self.special_output_xlsx)
-        special_xlsx_hbox.addWidget(self.special_xlsx_browse)
-
         self.log_file_label = QtWidgets.QLabel('Файл логов:')
         self.log_file = QtWidgets.QLineEdit('parser.log')  # Стандартный файл логов
         self.log_browse = QtWidgets.QPushButton('Обзор')
@@ -139,12 +121,6 @@ class ParserApp(QtWidgets.QWidget):
         main_layout.addWidget(self.output_xlsx_label)
         main_layout.addLayout(xlsx_hbox)
 
-        main_layout.addWidget(self.special_output_csv_label)
-        main_layout.addLayout(special_csv_hbox)
-
-        main_layout.addWidget(self.special_output_xlsx_label)
-        main_layout.addLayout(special_xlsx_hbox)
-
         main_layout.addWidget(self.log_file_label)
         main_layout.addLayout(log_hbox)
 
@@ -154,7 +130,10 @@ class ParserApp(QtWidgets.QWidget):
 
         self.setLayout(main_layout)
 
-    def toggle_db_fields(self, text):
+    def toggle_db_fields(self, text: str):
+        """
+        Переключает видимость полей в зависимости от выбранного типа базы данных.
+        """
         if text == 'postgres':
             self.pg_group.show()
             self.sqlite_group.hide()
@@ -163,41 +142,72 @@ class ParserApp(QtWidgets.QWidget):
             self.sqlite_group.show()
 
     def browse_sqlite(self):
-        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Выберите файл SQLite', '', 'SQLite Files (*.sqlite *.db);;All Files (*)')
+        """
+        Открывает диалог выбора файла для SQLite.
+        """
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            'Выберите файл SQLite',
+            '',
+            'SQLite Files (*.sqlite *.db);;All Files (*)'
+        )
         if file_path:
             self.sqlite_path.setText(file_path)
 
     def browse_xml_dir(self):
-        dir_path = QtWidgets.QFileDialog.getExistingDirectory(self, 'Выберите директорию с XML-файлами')
+        """
+        Открывает диалог выбора директории с XML-файлами.
+        """
+        dir_path = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            'Выберите директорию с XML-файлами'
+        )
         if dir_path:
             self.xml_dir.setText(dir_path)
 
     def browse_output_csv(self):
-        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Выберите выходной CSV файл', '', 'CSV Files (*.csv);;All Files (*)')
+        """
+        Открывает диалог выбора выходного CSV файла.
+        """
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            'Выберите выходной CSV файл',
+            '',
+            'CSV Files (*.csv);;All Files (*)'
+        )
         if file_path:
             self.output_csv.setText(file_path)
 
     def browse_output_xlsx(self):
-        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Выберите выходной XLSX файл', '', 'Excel Files (*.xlsx);;All Files (*)')
+        """
+        Открывает диалог выбора выходного XLSX файла.
+        """
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            'Выберите выходной XLSX файл',
+            '',
+            'Excel Files (*.xlsx);;All Files (*)'
+        )
         if file_path:
             self.output_xlsx.setText(file_path)
 
-    def browse_special_output_csv(self):
-        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Выберите выходной CSV файл для специальных записей', '', 'CSV Files (*.csv);;All Files (*)')
-        if file_path:
-            self.special_output_csv.setText(file_path)
-
-    def browse_special_output_xlsx(self):
-        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Выберите выходной XLSX файл для специальных записей', '', 'Excel Files (*.xlsx);;All Files (*)')
-        if file_path:
-            self.special_output_xlsx.setText(file_path)
-
     def browse_log_file(self):
-        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Выберите файл логов', '', 'Log Files (*.log);;All Files (*)')
+        """
+        Открывает диалог выбора файла логов.
+        """
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            'Выберите файл логов',
+            '',
+            'Log Files (*.log);;All Files (*)'
+        )
         if file_path:
             self.log_file.setText(file_path)
 
     def run_parser(self):
+        """
+        Сбор параметров и запуск парсера.
+        """
         # Сбор всех параметров
         db_type = self.db_type_combo.currentText()
         db_config = {'type': db_type}
@@ -213,14 +223,22 @@ class ParserApp(QtWidgets.QWidget):
             required_pg_fields = ['host', 'port', 'database', 'user', 'password']
             missing = [field for field in required_pg_fields if not db_config.get(field)]
             if missing:
-                QtWidgets.QMessageBox.critical(self, 'Ошибка', f"Отсутствуют обязательные поля для PostgreSQL: {', '.join(missing)}")
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    'Ошибка',
+                    f"Отсутствуют обязательные поля для PostgreSQL: {', '.join(missing)}"
+                )
                 return
         elif db_type == 'sqlite':
             db_config.update({
                 'sqlite_path': self.sqlite_path.text() or 'egrn_database.sqlite'
             })
             if not db_config['sqlite_path']:
-                QtWidgets.QMessageBox.critical(self, 'Ошибка', "Отсутствует путь к файлу SQLite.")
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    'Ошибка',
+                    "Отсутствует путь к файлу SQLite."
+                )
                 return
 
         xml_directory = self.xml_dir.text() or 'xml_files'
@@ -230,44 +248,34 @@ class ParserApp(QtWidgets.QWidget):
                 os.makedirs(xml_directory, exist_ok=True)
                 logging.info(f"Создана директория для XML-файлов: {xml_directory}")
             except Exception as e:
-                QtWidgets.QMessageBox.critical(self, 'Ошибка', f"Не удалось создать директорию {xml_directory}: {e}")
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    'Ошибка',
+                    f"Не удалось создать директорию {xml_directory}: {e}"
+                )
                 return
 
         output_csv = self.output_csv.text() or 'output/restrict_records.csv'
         output_xlsx = self.output_xlsx.text() or 'output/restrict_records.xlsx'
-        special_output_csv = self.special_output_csv.text() or 'output/special_restrict_records.csv'
-        special_output_xlsx = self.special_output_xlsx.text() or 'output/special_restrict_records.xlsx'
         log_file = self.log_file.text() or 'parser.log'
 
         # Проверка и создание директорий для выходных файлов
-        for path in [output_csv, output_xlsx, special_output_csv, special_output_xlsx, log_file]:
-            dir_name = os.path.dirname(path)
-            if dir_name and not os.path.exists(dir_name):
-                try:
+        try:
+            for path in [output_csv, output_xlsx, log_file]:
+                dir_name = os.path.dirname(path)
+                if dir_name and not os.path.exists(dir_name):
                     os.makedirs(dir_name, exist_ok=True)
                     logging.info(f"Создана директория для {path}: {dir_name}")
-                except Exception as e:
-                    QtWidgets.QMessageBox.critical(self, 'Ошибка', f"Не удалось создать директорию для {path}: {e}")
-                    return
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                'Ошибка',
+                f"Не удалось создать директорию для выходных файлов: {e}"
+            )
+            return
 
         # Настройка логирования в GUI
-        logger = logging.getLogger('')
-        logger.setLevel(logging.INFO)
-        # Удаление всех обработчиков, чтобы избежать дублирования
-        while logger.handlers:
-            logger.handlers.pop()
-        # Создание обработчика для файла
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s:%(message)s'))
-        logger.addHandler(file_handler)
-        # Создание обработчика для консоли
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s:%(message)s'))
-        logger.addHandler(console_handler)
-        # Создание обработчика для вывода в QTextEdit
-        text_handler = QTextEditLogger(self.log_output)
-        text_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s:%(message)s'))
-        logger.addHandler(text_handler)
+        self.setup_logging(log_file)
 
         # Запуск парсера
         self.run_button.setEnabled(False)
@@ -280,22 +288,20 @@ class ParserApp(QtWidgets.QWidget):
                 xml_directory,
                 output_csv,
                 output_xlsx,
-                special_output_csv,
-                special_output_xlsx,
                 log_file
             )
         )
 
-    def execute_parser(self, db_config, xml_directory, output_csv, output_xlsx,
-                       special_output_csv, special_output_xlsx, log_file):
+    def execute_parser(self, db_config, xml_directory, output_csv, output_xlsx, log_file):
+        """
+        Выполняет парсинг в отдельном потоке.
+        """
         try:
             parser = EGRNParser(
                 db_config=db_config,
                 xml_directory=xml_directory,
                 output_csv=output_csv,
                 output_xlsx=output_xlsx,
-                special_output_csv=special_output_csv,
-                special_output_xlsx=special_output_xlsx,
                 log_file=log_file
             )
             parser.run()
@@ -308,6 +314,28 @@ class ParserApp(QtWidgets.QWidget):
             self.run_button.setEnabled(True)
             self.run_button.setText('Запустить парсер')
 
+    def setup_logging(self, log_file: str):
+        """
+        Настройка логирования для GUI.
+        """
+        logger = logging.getLogger()
+        logger.setLevel(logging.INFO)
+        # Удаление всех обработчиков, чтобы избежать дублирования
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+        # Создание обработчика для файла
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+        logger.addHandler(file_handler)
+        # Создание обработчика для консоли
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+        logger.addHandler(console_handler)
+        # Создание обработчика для вывода в QTextEdit
+        text_handler = QTextEditLogger(self.log_output)
+        text_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+        logger.addHandler(text_handler)
+
 
 class QTextEditLogger(logging.Handler):
     """
@@ -319,10 +347,11 @@ class QTextEditLogger(logging.Handler):
 
     def emit(self, record):
         msg = self.format(record)
-        def append():
-            self.text_edit.append(msg)
         QtCore.QMetaObject.invokeMethod(
-            self.text_edit, "append", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, msg)
+            self.text_edit,
+            "append",
+            QtCore.Qt.QueuedConnection,
+            QtCore.Q_ARG(str, msg)
         )
 
 
