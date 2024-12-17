@@ -1,5 +1,3 @@
-# main.py
-
 import argparse
 import logging
 import os
@@ -23,10 +21,9 @@ def parse_arguments() -> argparse.Namespace:
         '--db_type',
         type=str,
         choices=['postgres', 'sqlite'],
-        default='sqlite',  # По умолчанию sqlite
+        default='sqlite',
         help='Тип базы данных: postgres или sqlite (по умолчанию: sqlite).'
     )
-    # Параметры для PostgreSQL
     parser.add_argument(
         '--db_host',
         type=str,
@@ -52,36 +49,34 @@ def parse_arguments() -> argparse.Namespace:
         type=str,
         help='Пароль PostgreSQL.'
     )
-    # Параметры для SQLite
     parser.add_argument(
         '--sqlite_path',
         type=str,
-        default='egrn_database.sqlite',  # Стандартное имя файла
+        default='egrn_database.sqlite',
         help='Путь к файлу SQLite (по умолчанию: ./egrn_database.sqlite).'
     )
-    # Общие параметры
     parser.add_argument(
         '--xml_directory',
         type=str,
-        default='xml_files',  # Стандартная директория
+        default='xml_files',
         help='Путь к директории с XML-файлами (по умолчанию: ./xml_files).'
     )
     parser.add_argument(
         '--output_csv',
         type=str,
-        default='output/restrict_records.csv',  # Стандартный путь
+        default='output/restrict_records.csv',
         help='Путь к выходному CSV файлу (по умолчанию: output/restrict_records.csv).'
     )
     parser.add_argument(
         '--output_xlsx',
         type=str,
-        default='output/restrict_records.xlsx',  # Стандартный путь
+        default='output/restrict_records.xlsx',
         help='Путь к выходному XLSX файлу (по умолчанию: output/restrict_records.xlsx).'
     )
     parser.add_argument(
         '--log_file',
         type=str,
-        default='parser.log',  # Стандартный файл логов
+        default='parser.log',
         help='Путь к файлу логов (по умолчанию: parser.log).'
     )
     return parser.parse_args()
@@ -94,16 +89,13 @@ def setup_logging(log_file: str) -> None:
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    # Форматтер
     formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
-    # Файловый обработчик
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    # Консольный обработчик
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
@@ -155,10 +147,8 @@ def run_cli(args: argparse.Namespace) -> None:
     """
     logging.info("Запуск парсера в CLI-режиме.")
 
-    # Формирование конфигурации базы данных
     db_config = get_db_config(args)
 
-    # Создание необходимых директорий
     create_output_directories([
         args.output_csv, args.output_xlsx,
         args.log_file
