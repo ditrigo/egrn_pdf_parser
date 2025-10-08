@@ -1,5 +1,6 @@
 import os
 import logging
+from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import re
@@ -9,23 +10,30 @@ from sqlalchemy import create_engine, Column, String, DateTime, Integer, Foreign
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 import pandas as pd
 import json
+import argparse
 
 Base = declarative_base()
 
 
+class FileRecord(Base):
+    __tablename__ = 'file_records'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    file_name = Column(String, unique=True, nullable=False)
+    parsed_at = Column(DateTime, default=datetime.utcnow)
+    
+    main_records = relationship('MainRecord', back_populates='file_record', cascade='all, delete-orphan')
+
+
 class MainRecord(Base):
     __tablename__ = 'main_records'
-    __table_args__ = (UniqueConstraint('registration_number', name='uix_registration_number'),)
+    __table_args__ = (UniqueConstraint('registration_number', 'file_record_id', name='uix_registration_number_file'),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    # details_statement fields
     organ_registr_rights = Column(String, nullable=True)
     date_formation = Column(DateTime, nullable=True)
-    registration_number = Column(String, nullable=True, unique=True)
-    # details_request fields
+    registration_number = Column(String, nullable=True)
     date_received_request = Column(DateTime, nullable=True)
     date_receipt_request_reg_authority_rights = Column(DateTime, nullable=True)
-    # land_record fields
     cad_number = Column(String, nullable=True)  # Кадастровый номер ЗУ
     readable_address = Column(String, nullable=True)  # Местоположение ЗУ
     purpose_code = Column(String, nullable=True)  # Код категории земель ЗУ
@@ -34,13 +42,13 @@ class MainRecord(Base):
     permitted_use_established = Column(String, nullable=True)  # Вид(ы) разрешенного использования ЗУ
     area = Column(Float, nullable=True)  # Площадь ЗУ (кв. м)
 
-    # Связи с другими таблицами
+    file_record_id = Column(Integer, ForeignKey('file_records.id'), nullable=False)
+    file_record = relationship('FileRecord', back_populates='main_records')
+
     right_records = relationship('RightRecord', back_populates='main_record', cascade='all, delete-orphan')
     restrict_records = relationship('RestrictRecord', back_populates='main_record', cascade='all, delete-orphan')
     deal_records = relationship('DealRecord', back_populates='main_record', cascade='all, delete-orphan')
 
-    # Метаданные
-    source_file = Column(String, nullable=True)
     parsed_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -136,27 +144,44 @@ class EGRNParser:
         self.output_xlsx = output_xlsx
         self.log_file = log_file
 
-        self.logger = logging.getLogger('EGRNParser')
+        logger_name = f"EGRNParser[{os.path.abspath(self.log_file)}]"
+        self.logger = logging.getLogger(logger_name)
         self.logger.setLevel(logging.INFO)
+        self.logger.propagate = False
 
-        formatter = logging.Formatter(
-            '%(asctime)s %(levelname)s: %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
+        self._ensure_parent_directory(self.output_csv)
+        self._ensure_parent_directory(self.output_xlsx)
+        self._ensure_parent_directory(self.log_file)
 
-        file_handler = logging.FileHandler(self.log_file)
-        file_handler.setLevel(logging.INFO)
-        file_handler.setFormatter(formatter)
-        self.logger.addHandler(file_handler)
+        if not self.logger.handlers:
+            formatter = logging.Formatter(
+                '%(asctime)s %(levelname)s: %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
 
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(formatter)
-        self.logger.addHandler(console_handler)
+            file_handler = logging.FileHandler(self.log_file)
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
+
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            console_handler.setFormatter(formatter)
+            self.logger.addHandler(console_handler)
 
         self.logger.info("Инициализация парсера начата.")
 
         self.Session = self.init_db()
+
+    def _ensure_parent_directory(self, path: str) -> None:
+        """
+        Создаёт директорию для файла, если она отсутствует.
+        """
+        if not path:
+            return
+        directory = os.path.dirname(os.path.abspath(path))
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
 
 
     def init_db(self) -> sessionmaker:
@@ -173,6 +198,8 @@ class EGRNParser:
             engine = create_engine(connection_string, echo=False, client_encoding='utf8')
         elif self.db_config['type'] == 'sqlite':
             sqlite_path = self.db_config['sqlite_path']
+            if sqlite_path not in (None, '', ':memory:'):
+                self._ensure_parent_directory(sqlite_path)
             connection_string = f'sqlite:///{sqlite_path}'
             engine = create_engine(connection_string, echo=False)
         else:
@@ -201,11 +228,21 @@ class EGRNParser:
 
     def parse_xml(self, file_path: str, session):
         """
-        Парсит XML-файл и сохраняет данные в базу данных.
+        Парсит XML-файл и сохраняет данные в базу данных с привязкой к конкретному файлу.
         """
         self.logger.info(f"Начало парсинга файла: {file_path}")
 
         try:
+            file_name = os.path.relpath(file_path, self.xml_directory)
+            file_record = session.query(FileRecord).filter_by(file_name=file_name).first()
+            if not file_record:
+                file_record = FileRecord(file_name=file_name)
+                session.add(file_record)
+                session.commit()
+                self.logger.info(f"Создана запись FileRecord для файла: {file_name}")
+            else:
+                self.logger.info(f"FileRecord для файла '{file_name}' уже существует.")
+
             context = etree.iterparse(file_path, events=('end',), tag='extract_contract_participation_share_holdings', recover=True, encoding='utf-8')
 
             for event, elem in context:
@@ -217,9 +254,9 @@ class EGRNParser:
                 deal_records = self.parse_deal_records(elem)
 
                 registration_number = details_statement.get('registration_number')
-                existing_main = session.query(MainRecord).filter_by(registration_number=registration_number).first()
+                existing_main = session.query(MainRecord).filter_by(registration_number=registration_number, file_record_id=file_record.id).first()
                 if existing_main:
-                    self.logger.info(f"MainRecord с registration_number '{registration_number}' уже существует. Пропуск.")
+                    self.logger.info(f"MainRecord с registration_number '{registration_number}' уже существует для файла '{file_name}'. Пропуск.")
                     elem.clear()
                     while elem.getprevious() is not None:
                         del elem.getparent()[0]
@@ -238,12 +275,13 @@ class EGRNParser:
                     permitted_use_code=land_record.get('permitted_use_code'),
                     permitted_use_established=land_record.get('permitted_use_established'),
                     area=land_record.get('area'),
-                    source_file=os.path.basename(file_path)
+                    file_record=file_record
                 )
 
                 for right in right_records:
                     right_number = right.get('right_number')
-                    existing_right = session.query(RightRecord).filter_by(right_number=right_number).first()
+                    with session.no_autoflush:
+                        existing_right = session.query(RightRecord).filter_by(right_number=right_number).first()
                     if existing_right:
                         self.logger.info(f"RightRecord с right_number '{right_number}' уже существует. Пропуск.")
                         continue
@@ -260,7 +298,8 @@ class EGRNParser:
 
                 for restrict in restrict_records:
                     restriction_number = restrict.get('restriction_number')
-                    existing_restrict = session.query(RestrictRecord).filter_by(restriction_number=restriction_number).first()
+                    with session.no_autoflush:
+                        existing_restrict = session.query(RestrictRecord).filter_by(restriction_number=restriction_number).first()
                     if existing_restrict:
                         self.logger.info(f"RestrictRecord с restriction_number '{restriction_number}' уже существует. Пропуск.")
                         continue
@@ -282,11 +321,10 @@ class EGRNParser:
                     )
                     main_record.restrict_records.append(restrict_record)
 
-                # Добавление DealRecords
                 for deal in deal_records:
                     deal_number = deal.get('deal_number')
-                    # Проверка существования DealRecord
-                    existing_deal = session.query(DealRecord).filter_by(deal_number=deal_number).first()
+                    with session.no_autoflush:
+                        existing_deal = session.query(DealRecord).filter_by(deal_number=deal_number).first()
                     if existing_deal:
                         self.logger.info(f"DealRecord с deal_number '{deal_number}' уже существует. Пропуск.")
                         continue
@@ -309,10 +347,8 @@ class EGRNParser:
                     )
                     main_record.deal_records.append(deal_record)
 
-                    # Добавление DealParties
                     deal_parties = deal.get('deal_parties', [])
                     for party in deal_parties:
-                        # Сериализуем информацию об участнике в JSON строку
                         party_info_json = json.dumps(party, ensure_ascii=False)
                         deal_party = DealParty(
                             concession_mark=party.get('concession_mark'),
@@ -542,10 +578,8 @@ class EGRNParser:
                     registration_date = None
                 record['registration_date'] = registration_date
 
-                # Извлечение deal_number из документов
                 documents = self.parse_documents(restrict_elem)
                 record['documents'] = documents
-                # Извлечем deal_number из документов, если он присутствует
                 deal_number = next((doc['deal_number'] for doc in documents if doc.get('deal_number')), None)
                 record['deal_number'] = deal_number or ""
 
@@ -631,7 +665,7 @@ class EGRNParser:
                 documents = self.parse_documents(deal_elem)
                 record['documents'] = documents
 
-                # Парсинг участников сделки (deal_parties)
+                # Участников сделки (deal_parties)
                 deal_parties = self.parse_deal_parties(deal_elem)
                 record['deal_parties'] = deal_parties
 
@@ -667,7 +701,7 @@ class EGRNParser:
                 party['party_type_code'] = party_type_code.strip()
                 party['party_type_value'] = party_type_value.strip()
 
-                # Определяем тип участника сделки
+                # Тип участника сделки
                 individual = party_elem.find('.//party_info/individual')
                 legal_entity = party_elem.find('.//party_info/legal_entity')
 
@@ -735,6 +769,8 @@ class EGRNParser:
             self.logger.error(f"Ошибка при парсинге документов: {e}")
         return documents
     
+
+
     def save_to_csv_xlsx(self, session, output_csv: str, output_xlsx: str):
         """
         Экспортирует данные из базы данных в CSV и XLSX файлы с заданной структурой.
@@ -742,11 +778,33 @@ class EGRNParser:
         self.logger.info("Начало экспорта данных в CSV и XLSX")
         try:
             main_records = session.query(MainRecord).all()
-            records_data = []
+            records_data: List[Dict[str, Any]] = []
+
+            def apply_restrict_fields(target: Dict[str, Any], restrict: RestrictRecord) -> None:
+                target['Признак ипотеки'] = "Да" if restrict.restriction_number else "Нет"
+                target['Номер государственной регистрации обременения / ограничения'] = restrict.restriction_number or ""
+                target['Дата государственной регистрации обременения / ограничения'] = (
+                    restrict.registration_date.isoformat() if restrict.registration_date else ""
+                )
+                target['Срок обременения / ограничения'] = restrict.end_date if restrict.end_date is not None else ""
+                target['Банк'] = restrict.bank or ""
+                target['ИНН Банка'] = restrict.bank_inn or ""
+
+            def match_related_restrict(document: Dict[str, Any], restricts: List[RestrictRecord]) -> Optional[RestrictRecord]:
+                for restrict in restricts:
+                    if not restrict.documents:
+                        continue
+                    try:
+                        restrict_docs = json.loads(restrict.documents)
+                    except json.JSONDecodeError:
+                        continue
+                    for r_doc in restrict_docs:
+                        if all(r_doc.get(key) == document.get(key) for key in ('doc_value', 'doc_name', 'doc_number')):
+                            return restrict
+                return None
 
             for main in main_records:
-                main_id = main.id
-                record_dict = {
+                base_record = {
                     '№': main.id,
                     'Кадастровый номер ЗУ': main.cad_number or "",
                     'Местоположение ЗУ': main.readable_address or "",
@@ -788,160 +846,132 @@ class EGRNParser:
                     'Срок обременения / ограничения2': "",
                 }
 
-                # Извлечение данных из RightRecords
                 if main.right_records:
                     right = main.right_records[0]
-                    # Правообладатели
                     holders = right.holders
                     if holders:
                         try:
                             holders_list = json.loads(holders)
                             holder_names = "; ".join([holder['name'] for holder in holders_list if holder.get('name')])
                             holder_inns = "; ".join([holder['inn'] for holder in holders_list if holder.get('inn')])
-                            record_dict['Правообладатель (правообладатели) ЗУ'] = holder_names
-                            record_dict['ИНН правообладателя (правообладателей) ЗУ'] = holder_inns
+                            base_record['Правообладатель (правообладатели) ЗУ'] = holder_names
+                            base_record['ИНН правообладателя (правообладателей) ЗУ'] = holder_inns
                         except json.JSONDecodeError:
                             self.logger.warning(f"Невозможно распарсить holders JSON: {holders}")
-                            record_dict['Правообладатель (правообладатели) ЗУ'] = right.holders
-                            record_dict['ИНН правообладателя (правообладателей) ЗУ'] = ""
+                            base_record['Правообладатель (правообладатели) ЗУ'] = right.holders or ""
+                            base_record['ИНН правообладателя (правообладателей) ЗУ'] = ""
 
-                    # Вид государственной регистрации права
-                    record_dict['Вид государственной регистрации права'] = right.right_type or ""
-                    # Номер и дата регистрации права
-                    record_dict['Номер государственной регистрации права'] = right.right_number or ""
-                    record_dict['Дата государственной регистрации права'] = right.registration_date.isoformat() if right.registration_date else ""
+                    base_record['Вид государственной регистрации права'] = right.right_type or ""
+                    base_record['Номер государственной регистрации права'] = right.right_number or ""
+                    base_record['Дата государственной регистрации права'] = (
+                        right.registration_date.isoformat() if right.registration_date else ""
+                    )
 
-                # Извлечение данных из DealRecords
+                restricts_by_deal: Dict[str, List[RestrictRecord]] = defaultdict(list)
+                standalone_restricts: List[RestrictRecord] = []
+                for restrict in main.restrict_records:
+                    key = (restrict.deal_number or "").strip()
+                    if key:
+                        restricts_by_deal[key].append(restrict)
+                    else:
+                        standalone_restricts.append(restrict)
+
                 if main.deal_records:
                     for deal in main.deal_records:
-                        deal_number = deal.deal_number or ""
-                        # Поиск соответствующих RestrictRecords по deal_number
-                        restricts = [r for r in main.restrict_records if r.deal_number == deal_number]
-                        # Заполнение данных сделки
-                        record_deal = record_dict.copy()
-                        record_deal.update({
-                            'Реквизиты договора ДДУ': "",
-                            'Дата заключение ДДУ': "",
-                            'Номер государственной регистрации ДДУ': "",
-                            'Дата государственной регистрации ДДУ': "",
-                            'Тип объект ДДУ': "",
-                            'Условный номер объекта ДДУ': "",
-                            'Этаж расположения объекта ДДУ': "",
-                            'Площадь объекта ДДУ (кв. м)': "",
-                            'Правообладатель': "",
-                            'Признак ипотеки': "",
-                            'Банк': "",
-                            'ИНН Банка': "",
-                            'Номер государственной регистрации обременения / ограничения': "",
-                            'Дата государственной регистрации обременения / ограничения': "",
-                            'Срок обременения / ограничения': "",
-                            'Эскроу счет': "",
-                            'Признак уступки ДДУ': "",
-                            'Реквизиты договора УДДУ': "",
-                            'Дата заключение УДДУ': "",
-                            'Номер государственной регистрации УДДУ': "",
-                            'Дата государственной регистрации УДДУ': "",
-                            'Правообладатель2': "",
-                            'Признак ипотеки2': "",
-                            'Банк2': "",
-                            'ИНН Банка2': "",
-                            'Номер государственной регистрации обременения / ограничения2': "",
-                            'Дата государственной регистрации обременения / ограничения2': "",
-                            'Срок обременения / ограничения2': "",
-                        })
+                        deal_row = base_record.copy()
 
-                        # Парсинг документов
-                        main_doc = None
-                        related_doc = None
-                        related_main_doc = None
+                        main_doc: Optional[Dict[str, Any]] = None
+                        related_doc: Optional[Dict[str, Any]] = None
+                        related_main_doc: Optional[RestrictRecord] = None
+
                         if deal.documents:
                             try:
                                 documents_list = json.loads(deal.documents)
-                                for doc in documents_list:
-                                    if 'уступке' in doc.get('doc_value', '').lower():
-                                        related_doc = doc
-                                        for restrict in main.restrict_records:
-                                            if (restrict.documents and 
-                                                any(r_doc.get('doc_value') == doc.get('doc_value') and
-                                                    r_doc.get('doc_name') == doc.get('doc_name') and
-                                                    r_doc.get('doc_number') == doc.get('doc_number')
-                                                    for r_doc in json.loads(restrict.documents))):
-                                                related_main_doc = restrict
-                                                break
-                                    else:
-                                        if not main_doc:
-                                            main_doc = doc
-                                    
                             except json.JSONDecodeError:
                                 self.logger.warning(f"Невозможно распарсить documents JSON: {deal.documents}")
+                                documents_list = []
+                            for doc in documents_list:
+                                doc_value = (doc.get('doc_value') or '').lower()
+                                if 'уступк' in doc_value:
+                                    related_doc = doc
+                                    related_main_doc = match_related_restrict(doc, main.restrict_records)
+                                elif not main_doc:
+                                    main_doc = doc
 
-                        # Заполнение данных основного документа
                         if main_doc:
-                            record_deal['Реквизиты договора ДДУ'] = f"{main_doc.get('doc_name', '')} {main_doc.get('doc_number', '')}".strip()
-                            record_deal['Дата заключение ДДУ'] = main_doc.get('doc_date', '')
-                            record_deal['Номер государственной регистрации ДДУ'] = deal.deal_number or ""
-                            record_deal['Дата государственной регистрации ДДУ'] = deal.registration_date or ""
-                            record_deal['Тип объект ДДУ'] = deal.room_name or ""
-                            record_deal['Условный номер объекта ДДУ'] = deal.room_number or ""
-                            record_deal['Этаж расположения объекта ДДУ'] = deal.floor_number if deal.floor_number is not None else ""
-                            record_deal['Площадь объекта ДДУ (кв. м)'] = deal.room_area if deal.room_area is not None else ""
-                            record_deal['Эскроу счет'] = deal.bank or ""
+                            deal_row['Реквизиты договора ДДУ'] = f"{main_doc.get('doc_name', '')} {main_doc.get('doc_number', '')}".strip()
+                            deal_row['Дата заключение ДДУ'] = main_doc.get('doc_date', '') or ""
 
-                            # Признак уступки ДДУ
-                            if related_doc:
-                                record_deal['Признак уступки ДДУ'] = "Да"
-                                record_deal['Реквизиты договора УДДУ'] = f"{related_doc.get('doc_name', '')} {related_doc.get('doc_number', '')}".strip()
-                                record_deal['Дата заключение УДДУ'] = related_doc.get('doc_date', '')
-                                record_deal['Номер государственной регистрации УДДУ'] = related_main_doc.deal_number or ""
-                                record_deal['Дата государственной регистрации УДДУ'] = related_main_doc.registration_date or ""
-                                
-                                deal_parties = [dp.party_info for dp in deal.deal_parties]
-                                deal_parties_str = "; ".join([self.format_deal_party(party) for party in deal_parties])
-                                record_deal['Правообладатель2'] = deal_parties_str
-                                
-                                record_deal['Банк2'] = related_main_doc.bank or ""
-                                record_deal['ИНН Банка2'] = related_main_doc.bank_inn or ""
-                                record_deal['Номер государственной регистрации обременения / ограничения2'] = related_main_doc.restriction_number or ""
-                                record_deal['Дата государственной регистрации обременения / ограничения2'] = related_main_doc.registration_date.isoformat() if related_main_doc.registration_date else ""
-                                record_deal['Срок обременения / ограничения2'] = related_main_doc.end_date if related_main_doc.end_date is not None else ""
-                                record_deal['Признак ипотеки2'] = "Да" if related_main_doc.restriction_number else "Нет"
-                            else:
-                                record_deal['Признак уступки ДДУ'] = "Нет"
-                                record_deal['Реквизиты договора УДДУ'] = "данные отсутствуют"
-                                record_deal['Дата заключение УДДУ'] = "данные отсутствуют"
-                                record_deal['Номер государственной регистрации УДДУ'] = "данные отсутствуют"
-                                record_deal['Дата государственной регистрации УДДУ'] = "данные отсутствуют"
+                        deal_row['Номер государственной регистрации ДДУ'] = deal.deal_number or ""
+                        deal_row['Дата государственной регистрации ДДУ'] = (
+                            deal.registration_date.isoformat() if deal.registration_date else ""
+                        )
+                        deal_row['Тип объект ДДУ'] = deal.room_name or ""
+                        deal_row['Условный номер объекта ДДУ'] = deal.room_number or ""
+                        deal_row['Этаж расположения объекта ДДУ'] = deal.floor_number if deal.floor_number is not None else ""
+                        deal_row['Площадь объекта ДДУ (кв. м)'] = deal.room_area if deal.room_area is not None else ""
+                        deal_row['Эскроу счет'] = deal.bank or ""
 
-                        # Извлечение и агрегирование DealParties
                         deal_parties = [dp.party_info for dp in deal.deal_parties]
-                        deal_parties_str = "; ".join([self.format_deal_party(party) for party in deal_parties])
-                        record_deal['Правообладатель'] = deal_parties_str
+                        parties_str = "; ".join([self.format_deal_party(party) for party in deal_parties])
+                        deal_row['Правообладатель'] = parties_str
 
-                        # Сопоставление RestrictRecords
-                        if restricts:
-                            for restrict in restricts:
-                                record_restrict = record_deal.copy()
-                                record_restrict['Признак ипотеки'] = "Да" if restrict.restriction_number else "Нет"
-                                record_restrict['Номер государственной регистрации обременения / ограничения'] = restrict.restriction_number or ""
-                                record_restrict['Дата государственной регистрации обременения / ограничения'] = restrict.registration_date.isoformat() if restrict.registration_date else ""
-                                record_restrict['Срок обременения / ограничения'] = restrict.end_date if restrict.end_date is not None else ""
-                                record_restrict['Банк'] = restrict.bank or ""
-                                record_restrict['ИНН Банка'] = restrict.bank_inn or ""
-
-                                # Заполнение информации о связанном документе, если он есть
-                                if related_doc:
-                                    # record_restrict['Признак ипотеки2'] = "Да" if restrict.restriction_number else "Нет"
-                                    # record_restrict['Номер государственной регистрации обременения / ограничения2'] = ""
-                                    # record_restrict['Дата государственной регистрации обременения / ограничения2'] = ""
-                                    # record_restrict['Срок обременения / ограничения2'] = ""
-                                    continue
-
-                                records_data.append(record_restrict)
+                        if related_doc:
+                            deal_row['Признак уступки ДДУ'] = "Да"
+                            deal_row['Реквизиты договора УДДУ'] = f"{related_doc.get('doc_name', '')} {related_doc.get('doc_number', '')}".strip()
+                            deal_row['Дата заключение УДДУ'] = related_doc.get('doc_date', '') or ""
+                            deal_row['Правообладатель2'] = parties_str
+                            if related_main_doc:
+                                deal_row['Номер государственной регистрации УДДУ'] = related_main_doc.deal_number or ""
+                                deal_row['Дата государственной регистрации УДДУ'] = (
+                                    related_main_doc.registration_date.isoformat() if related_main_doc.registration_date else ""
+                                )
+                                deal_row['Банк2'] = related_main_doc.bank or ""
+                                deal_row['ИНН Банка2'] = related_main_doc.bank_inn or ""
+                                deal_row['Номер государственной регистрации обременения / ограничения2'] = related_main_doc.restriction_number or ""
+                                deal_row['Дата государственной регистрации обременения / ограничения2'] = (
+                                    related_main_doc.registration_date.isoformat() if related_main_doc.registration_date else ""
+                                )
+                                deal_row['Срок обременения / ограничения2'] = (
+                                    related_main_doc.end_date if related_main_doc.end_date is not None else ""
+                                )
+                                deal_row['Признак ипотеки2'] = "Да" if related_main_doc.restriction_number else "Нет"
                         else:
-                            records_data.append(record_deal)
+                            deal_row['Признак уступки ДДУ'] = "Нет"
+                            deal_row['Реквизиты договора УДДУ'] = "данные отсутствуют"
+                            deal_row['Дата заключение УДДУ'] = "данные отсутствуют"
+                            deal_row['Номер государственной регистрации УДДУ'] = "данные отсутствуют"
+                            deal_row['Дата государственной регистрации УДДУ'] = "данные отсутствуют"
+
+                        deal_key = (deal.deal_number or "").strip()
+                        matched_restricts = restricts_by_deal.pop(deal_key, [])
+                        if matched_restricts:
+                            for restrict in matched_restricts:
+                                restrict_row = deal_row.copy()
+                                apply_restrict_fields(restrict_row, restrict)
+                                records_data.append(restrict_row)
+                        else:
+                            records_data.append(deal_row)
+
+                    for restrict in standalone_restricts:
+                        restrict_row = base_record.copy()
+                        apply_restrict_fields(restrict_row, restrict)
+                        records_data.append(restrict_row)
+
+                    for remaining in list(restricts_by_deal.values()):
+                        for restrict in remaining:
+                            restrict_row = base_record.copy()
+                            apply_restrict_fields(restrict_row, restrict)
+                            records_data.append(restrict_row)
+
                 else:
-                    # Если нет DealRecords, просто добавляем основной Record
-                    records_data.append(record_dict)
+                    if main.restrict_records:
+                        for restrict in main.restrict_records:
+                            restrict_row = base_record.copy()
+                            apply_restrict_fields(restrict_row, restrict)
+                            records_data.append(restrict_row)
+                    else:
+                        records_data.append(base_record)
 
             df = pd.DataFrame(records_data)
 
@@ -987,45 +1017,47 @@ class EGRNParser:
                 'Срок обременения / ограничения2',
             ]
 
-            # Проверка наличия всех нужных колонок
             missing_columns = set(desired_columns) - set(df.columns)
             if missing_columns:
                 self.logger.warning(f"Отсутствуют следующие колонки в данных: {missing_columns}")
                 for col in missing_columns:
-                    df[col] = None  # Заполнение отсутствующих колонок пустыми значениями
+                    df[col] = None
 
-            # Перестановка столбцов в требуемом порядке
             df = df[desired_columns]
 
-            # Проверка наличия данных
             if df.empty:
                 self.logger.warning("DataFrame пустой. Возможно, нет соответствующих данных для экспорта.")
             else:
-                # Сохранение в CSV
                 df.to_csv(output_csv, index=False, encoding='utf-8-sig')
                 self.logger.info(f"Данные успешно сохранены в CSV файл: {output_csv}")
 
-                # Сохранение в XLSX
                 df.to_excel(output_xlsx, index=False, engine='openpyxl')
                 self.logger.info(f"Данные успешно сохранены в XLSX файл: {output_xlsx}")
 
         except Exception as e:
             self.logger.error(f"Ошибка при экспорте данных в CSV/XLSX: {e}")
 
-
     def format_deal_party(self, party_str: Dict[str, Any]) -> str:
         """
         Форматирует информацию об участнике сделки для экспорта.
         """
-        party = json.loads(party_str).get('party_info')
-        if party.get('type') == 'individual':
+        if not party_str:
+            return "Неизвестный участник"
+
+        try:
+            payload = json.loads(party_str)
+        except (TypeError, json.JSONDecodeError):
+            self.logger.warning(f"Не удалось распарсить данные участника сделки: {party_str}")
+            return str(party_str)
+
+        party = payload.get('party_info') or {}
+        party_type = party.get('type')
+
+        if party_type == 'individual':
             name = party.get('name', '')
             return f"{name}"
-        elif party.get('type') == 'legal_entity':
+        elif party_type == 'legal_entity':
             name = party.get('name', '')
-            inn = party.get('inn', '')
-            ogrn = party.get('ogrn', '')
-            mailing_address = party.get('mailing_address', '')
             return f"{name}"
         else:
             return "Неизвестный тип участника"
@@ -1034,7 +1066,6 @@ class EGRNParser:
         """
         Основной метод для запуска парсера: находит все XML-файлы и обрабатывает их.
         """
-        # Проверка существования директории с XML-файлами
         if not os.path.isdir(self.xml_directory):
             self.logger.error(f"Указанная директория не существует: {self.xml_directory}")
             return
@@ -1067,7 +1098,6 @@ class EGRNParser:
 
 
 if __name__ == "__main__":
-    import argparse
 
     def parse_arguments():
         parser = argparse.ArgumentParser(description='Парсер XML-файлов и экспорт в CSV/XLSX.')

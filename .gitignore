@@ -5,3 +5,6 @@ __pycache__
 *.csv
 *.xml
 *.sqlite
+*.pdf
+*.pdf.sig
+*.xml.sig
