@@ -2,7 +2,7 @@ import os
 import logging
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import re
 
 from lxml import etree
@@ -59,7 +59,7 @@ class RightRecord(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     main_record_id = Column(Integer, ForeignKey('main_records.id'), nullable=False)
     registration_date = Column(DateTime, nullable=True)  # Дата государственной регистрации права
-    right_number = Column(String, nullable=True, unique=True)  # Номер государственной регистрации права
+    right_number = Column(String, nullable=True)  # Номер государственной регистрации права
     right_type_code = Column(String, nullable=True)  # Код вида государственной регистрации права
     right_type = Column(String, nullable=True)  # Вид государственной регистрации права
     holders = Column(String, nullable=True)  # Правообладатели ЗУ (строка JSON)
@@ -74,7 +74,7 @@ class RestrictRecord(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     main_record_id = Column(Integer, ForeignKey('main_records.id'), nullable=False)
-    restriction_number = Column(String, nullable=True, unique=True)  # Номер обременения/ограничения
+    restriction_number = Column(String, nullable=True)  # Номер обременения/ограничения
     restriction_type_code = Column(String, nullable=True)  # Код вида обременения/ограничения
     restriction_type = Column(String, nullable=True)  # Вид обременения/ограничения
     start_date = Column(DateTime, nullable=True)  # Начало срока обременения / ограничения
@@ -93,11 +93,13 @@ class RestrictRecord(Base):
 
 class DealRecord(Base):
     __tablename__ = 'deal_records'
-    __table_args__ = (UniqueConstraint('deal_number', name='uix_deal_number'),)
+    __table_args__ = (
+        UniqueConstraint('main_record_id', 'deal_number', 'room_number', name='uix_main_deal_room'),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     main_record_id = Column(Integer, ForeignKey('main_records.id'), nullable=False)
-    deal_number = Column(String, nullable=True, unique=True)  # Номер сделки
+    deal_number = Column(String, nullable=True) # Номер сделки
     registration_date = Column(DateTime, nullable=True)
     deal_type_code = Column(String, nullable=True)
     deal_type_value = Column(String, nullable=True)
@@ -254,7 +256,12 @@ class EGRNParser:
                 deal_records = self.parse_deal_records(elem)
 
                 registration_number = details_statement.get('registration_number')
-                existing_main = session.query(MainRecord).filter_by(registration_number=registration_number, file_record_id=file_record.id).first()
+                existing_main = None
+                if registration_number is not None:
+                    existing_main = session.query(MainRecord).filter_by(
+                        registration_number=registration_number,
+                        file_record_id=file_record.id
+                    ).first()
                 if existing_main:
                     self.logger.info(f"MainRecord с registration_number '{registration_number}' уже существует для файла '{file_name}'. Пропуск.")
                     elem.clear()
@@ -278,10 +285,15 @@ class EGRNParser:
                     file_record=file_record
                 )
 
+                session.add(main_record)
+                session.flush()
+                
                 for right in right_records:
                     right_number = right.get('right_number')
-                    with session.no_autoflush:
-                        existing_right = session.query(RightRecord).filter_by(right_number=right_number).first()
+                    existing_right = None
+                    if right_number is not None:
+                        with session.no_autoflush:
+                            existing_right = session.query(RightRecord).filter_by(right_number=right_number).first()
                     if existing_right:
                         self.logger.info(f"RightRecord с right_number '{right_number}' уже существует. Пропуск.")
                         continue
@@ -298,8 +310,10 @@ class EGRNParser:
 
                 for restrict in restrict_records:
                     restriction_number = restrict.get('restriction_number')
-                    with session.no_autoflush:
-                        existing_restrict = session.query(RestrictRecord).filter_by(restriction_number=restriction_number).first()
+                    existing_restrict = None
+                    if restriction_number is not None:
+                        with session.no_autoflush:
+                            existing_restrict = session.query(RestrictRecord).filter_by(restriction_number=restriction_number).first()
                     if existing_restrict:
                         self.logger.info(f"RestrictRecord с restriction_number '{restriction_number}' уже существует. Пропуск.")
                         continue
@@ -323,10 +337,16 @@ class EGRNParser:
 
                 for deal in deal_records:
                     deal_number = deal.get('deal_number')
+                    room_number = deal.get('room_number')
+                    
                     with session.no_autoflush:
-                        existing_deal = session.query(DealRecord).filter_by(deal_number=deal_number).first()
+                        existing_deal = session.query(DealRecord).filter_by(
+                            main_record_id=main_record.id,
+                            deal_number=deal_number,
+                            room_number=room_number
+                        ).first()
                     if existing_deal:
-                        self.logger.info(f"DealRecord с deal_number '{deal_number}' уже существует. Пропуск.")
+                        self.logger.info(f"DealRecord с deal_number '{deal_number}' и room_number '{room_number}' уже существует. Пропуск.")
                         continue
 
                     deal_record = DealRecord(
@@ -358,7 +378,6 @@ class EGRNParser:
                         )
                         deal_record.deal_parties.append(deal_party)
 
-                session.add(main_record)
                 session.commit()
 
                 self.logger.info(f"Парсинг и сохранение данных из файла {file_path} завершены успешно.")
@@ -385,7 +404,8 @@ class EGRNParser:
                 except ValueError:
                     self.logger.warning(f"Некорректный формат date_formation: {date_formation_str}")
                     details['date_formation'] = None
-                details['registration_number'] = details_elem.findtext('.//registration_number') or ""
+                reg_num = details_elem.findtext('.//registration_number')
+                details['registration_number'] = reg_num.strip() if reg_num else None
             return details
         except Exception as e:
             self.logger.error(f"Ошибка при парсинге details_statement: {e}")
@@ -480,7 +500,7 @@ class EGRNParser:
 
                 # Номер государственной регистрации права
                 right_number = right_elem.findtext('.//right_data/right_number')
-                record['right_number'] = right_number.strip() if right_number else ""
+                record['right_number'] = right_number.strip() if right_number else None
 
                 # Вид государственной регистрации права
                 restriction_type_code = right_elem.findtext('.//right_data/right_type/code')
@@ -524,8 +544,8 @@ class EGRNParser:
             for restrict_elem in restrict_elems:
                 record = {}
                 # Номер обременения/ограничения
-                restriction_number = restrict_elem.findtext('.//restrictions_encumbrances_data/restriction_encumbrance_number') or ""
-                record['restriction_number'] = restriction_number.strip()
+                restriction_number = restrict_elem.findtext('.//restrictions_encumbrances_data/restriction_encumbrance_number')
+                record['restriction_number'] = restriction_number.strip() if restriction_number else None
 
                 # Вид обременения/ограничения
                 restriction_type_code = restrict_elem.findtext('.//restrictions_encumbrances_data/restriction_encumbrance_type/code') or ""
@@ -596,19 +616,16 @@ class EGRNParser:
         Парсит раздел deal_records из XML и возвращает список словарей с данными.
         """
         try:
-            deal_records = []
+            result: List[Dict[str, Any]] = []
             deal_elems = elem.findall('.//deal_records/deal_record')
             for deal_elem in deal_elems:
                 record = {}
                 # Номер сделки
-                deal_number = deal_elem.findtext('.//deal_number') or ""
-                record['deal_number'] = deal_number.strip()
+                deal_number = (deal_elem.findtext('.//deal_number') or "").strip()
 
                 # Тип сделки
-                deal_type_code = deal_elem.findtext('.//deal_type/code') or ""
-                deal_type_value = deal_elem.findtext('.//deal_type/value') or ""
-                record['deal_type_code'] = deal_type_code.strip()
-                record['deal_type_value'] = deal_type_value.strip()
+                deal_type_code = (deal_elem.findtext('.//deal_type/code') or "").strip()
+                deal_type_value = (deal_elem.findtext('.//deal_type/value') or "").strip()
 
                 # Дата заключения ДДУ
                 first_ddu_date_str = deal_elem.findtext('.//deal_data/subject/share_subject_description/house_descriptions/house_description/first_ddu_date') or ""
@@ -617,57 +634,18 @@ class EGRNParser:
                 except ValueError:
                     self.logger.warning(f"Некорректный формат first_ddu_date: {first_ddu_date_str}")
                     first_ddu_date = None
-                record['first_ddu_date'] = first_ddu_date
-
-                # Тип объекта ДДУ
-                room_name = deal_elem.findtext('.//deal_data/subject/share_subject_description/house_descriptions/house_description/room_descriptions/room_description/room_name') or ""
-                record['room_name'] = room_name.strip()
-
-                # Условный номер объекта ДДУ
-                room_number = deal_elem.findtext('.//deal_data/subject/share_subject_description/house_descriptions/house_description/room_descriptions/room_description/room_number') or ""
-                record['room_number'] = room_number.strip()
-
-                # Этаж расположения объекта ДДУ
-                floor_number_str = deal_elem.findtext('.//deal_data/subject/share_subject_description/house_descriptions/house_description/room_descriptions/room_description/floor_number') or ""
-                try:
-                    floor_number = int(floor_number_str.strip()) if floor_number_str and floor_number_str.strip().isdigit() else None
-                except ValueError:
-                    self.logger.warning(f"Некорректный формат floor_number: {floor_number_str}")
-                    floor_number = None
-                record['floor_number'] = floor_number
-
-                # Площадь объекта ДДУ (кв. м)
-                room_area_str = deal_elem.findtext('.//deal_data/subject/share_subject_description/house_descriptions/house_description/room_descriptions/room_description/room_area') or ""
-                try:
-                    room_area = float(room_area_str.strip()) if room_area_str else None
-                except ValueError:
-                    self.logger.warning(f"Некорректный формат room_area: {room_area_str}")
-                    room_area = None
-                record['room_area'] = room_area
 
                 # Банк
-                bank = deal_elem.findtext('.//deal_data/subject/share_subject_description/bank') or ""
-                record['bank'] = bank.strip()
+                bank = (deal_elem.findtext('.//deal_data/subject/share_subject_description/bank') or "").strip()
 
                 # ИНН Банка
                 bank_inn = ""
-                record['bank_inn'] = bank_inn
-
-                # Срок обременения / ограничения
-                guarantee_period = deal_elem.findtext('.//deal_data/subject/share_subject_description/house_descriptions/house_description/room_descriptions/room_description/guarantee_period') or ""
-                record['guarantee_period'] = guarantee_period.strip()
-
-                # Признак ипотеки (transfer_deadline)
-                transfer_deadline = deal_elem.findtext('.//deal_data/subject/share_subject_description/house_descriptions/house_description/room_descriptions/room_description/transfer_deadline') or ""
-                record['transfer_deadline'] = transfer_deadline.strip()
 
                 # Документы
                 documents = self.parse_documents(deal_elem)
-                record['documents'] = documents
 
                 # Участников сделки (deal_parties)
                 deal_parties = self.parse_deal_parties(deal_elem)
-                record['deal_parties'] = deal_parties
 
                 registration_date_str = deal_elem.findtext('.//record_info/registration_date')
                 try:
@@ -675,15 +653,82 @@ class EGRNParser:
                 except ValueError:
                     self.logger.warning(f"Некорректный формат даты регистрации: {registration_date_str}")
                     registration_date = None
-                record['registration_date'] = registration_date
 
-                deal_records.append(record)
+                room_elems = deal_elem.findall('.//deal_data/subject/share_subject_description/house_descriptions/house_description/room_descriptions/room_description')
+                if not room_elems:
+                    record = {
+                        'deal_number': deal_number,
+                        'deal_type_code': deal_type_code,
+                        'deal_type_value': deal_type_value,
+                        'first_ddu_date': first_ddu_date,
+                        'room_name': "",
+                        'room_number': "",
+                        'floor_number': None,
+                        'room_area': None,
+                        'bank': bank,
+                        'bank_inn': bank_inn,
+                        'guarantee_period': "",
+                        'transfer_deadline': "",
+                        'documents': documents,
+                        'deal_parties': deal_parties,
+                        'registration_date': registration_date,
+                    }
+                    result.append(record)
+                    continue
 
-            return deal_records
+                for i, room in enumerate(room_elems):
+                    # Тип объекта ДДУ
+                    room_name = (room.findtext('./room_name') or "").strip()
+                    # Условный номер объекта ДДУ
+                    room_number = (room.findtext('./room_number') or "").strip()
+                    if not room_number:
+                        room_number = f"__idx_{i+1}"
 
+                    # Этаж расположения объекта ДДУ
+                    floor_number_str = room.findtext('./floor_number') or ""
+                    try:
+                        floor_number = int(floor_number_str.strip()) if floor_number_str.strip().isdigit() else None
+                    except ValueError:
+                        self.logger.warning(f"Некорректный формат floor_number: {floor_number_str}")
+                        floor_number = None
+
+                    # Площадь объекта ДДУ (кв. м)
+                    room_area_str = room.findtext('./room_area') or ""
+                    try:
+                        room_area = float(room_area_str.strip()) if room_area_str else None
+                    except ValueError:
+                        self.logger.warning(f"Некорректный формат room_area: {room_area_str}")
+                        room_area = None
+
+                    # Срок обременения / ограничения
+                    guarantee_period = (room.findtext('./guarantee_period') or "").strip()
+                    # Признак ипотеки (transfer_deadline)
+                    transfer_deadline = (room.findtext('./transfer_deadline') or "").strip()
+
+                    record = {
+                        'deal_number': deal_number,
+                        'deal_type_code': deal_type_code,
+                        'deal_type_value': deal_type_value,
+                        'first_ddu_date': first_ddu_date,
+                        'room_name': room_name,
+                        'room_number': room_number,
+                        'floor_number': floor_number,
+                        'room_area': room_area,
+                        'bank': bank,
+                        'bank_inn': bank_inn,
+                        'guarantee_period': guarantee_period,
+                        'transfer_deadline': transfer_deadline,
+                        'documents': documents,
+                        'deal_parties': deal_parties,
+                        'registration_date': registration_date,
+                    }
+                    result.append(record)
+
+            return result
         except Exception as e:
             self.logger.error(f"Ошибка при парсинге deal_records: {e}")
             return []
+
 
     def parse_deal_parties(self, deal_elem: etree._Element) -> List[Dict[str, Any]]:
         """
@@ -1037,7 +1082,7 @@ class EGRNParser:
         except Exception as e:
             self.logger.error(f"Ошибка при экспорте данных в CSV/XLSX: {e}")
 
-    def format_deal_party(self, party_str: Dict[str, Any]) -> str:
+    def format_deal_party(self, party_str: Union[str, Dict[str, Any]]) -> str:
         """
         Форматирует информацию об участнике сделки для экспорта.
         """
