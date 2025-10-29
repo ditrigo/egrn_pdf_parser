@@ -849,14 +849,15 @@ class EGRNParser:
                 }
                 for doc in documents:
                     code = (doc.get('doc_code') or "").strip()
-                    if not code:
+                    normalized_code = code.lstrip('-')
+                    if not normalized_code:
                         continue
-                    if code == '558401010212':
+                    if normalized_code == '558401010212':
                         if not document_fields['Номер кредитного договора']:
                             document_fields['Номер кредитного договора'] = doc.get('doc_number', '') or ""
                         if not document_fields['Дата кредитного договора']:
                             document_fields['Дата кредитного договора'] = doc.get('doc_date', '') or ""
-                    elif code == '558401010216':
+                    elif normalized_code == '558401010216':
                         document_fields['Наличие доп. соглашения'] = "Да"
                         if not document_fields['Дата доп. соглашения']:
                             document_fields['Дата доп. соглашения'] = doc.get('doc_date', '') or ""
@@ -884,10 +885,14 @@ class EGRNParser:
 
                 restrict_documents = load_documents_json(restrict.documents)
                 document_fields = compute_document_fields(restrict_documents)
-                target['Номер кредитного договора'] = document_fields['Номер кредитного договора']
-                target['Дата кредитного договора'] = document_fields['Дата кредитного договора']
-                target['Наличие доп. соглашения'] = document_fields['Наличие доп. соглашения']
-                target['Дата доп. соглашения'] = document_fields['Дата доп. соглашения']
+                target_document_fields = {
+                    'Номер кредитного договора': target.get('Номер кредитного договора', ""),
+                    'Дата кредитного договора': target.get('Дата кредитного договора', ""),
+                    'Наличие доп. соглашения': target.get('Наличие доп. соглашения', "Нет"),
+                    'Дата доп. соглашения': target.get('Дата доп. соглашения', ""),
+                }
+                merge_document_fields(target_document_fields, document_fields)
+                target.update(target_document_fields)
 
             def match_related_restrict(document: Dict[str, Any], restricts: List[RestrictRecord]) -> Optional[RestrictRecord]:
                 for restrict in restricts:

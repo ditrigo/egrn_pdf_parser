@@ -41,11 +41,15 @@ python parser.py \
 | `--output_csv PATH` (`output/restrict_records.csv`) | Путь для CSV |
 | `--output_xlsx PATH` (`output/restrict_records.xlsx`) | Путь для XLSX |
 | `--log_file PATH` (`parser.log`) | Файл логов |
+| `--recursive` | Включить поиск XML во всех вложенных папках |
 
 Примеры:
 ```bash
 # SQLite (значения по умолчанию использовать не обязательно)
 python main.py --xml_directory data/xml --output_csv output/result.csv
+
+# Рекурсивный сбор XML из вложенных каталогов
+python main.py --xml_directory data/xml --recursive
 
 # PostgreSQL
 python main.py \
