@@ -79,6 +79,11 @@ def parse_arguments() -> argparse.Namespace:
         default='parser.log',
         help='Путь к файлу логов (по умолчанию: parser.log).'
     )
+    parser.add_argument(
+        '--recursive',
+        action='store_true',
+        help='Включить рекурсивный поиск XML в указанной директории.'
+    )
     return parser.parse_args()
 
 
@@ -160,7 +165,8 @@ def run_cli(args: argparse.Namespace) -> None:
             xml_directory=args.xml_directory,
             output_csv=args.output_csv,
             output_xlsx=args.output_xlsx,
-            log_file=args.log_file
+            log_file=args.log_file,
+            recursive=args.recursive
         )
         parser.run()
         logging.info("Парсинг завершен успешно.")

@@ -138,13 +138,15 @@ class EGRNParser:
         xml_directory: str,
         output_csv: str,
         output_xlsx: str,
-        log_file: str = 'parser.log'
+        log_file: str = 'parser.log',
+        recursive: bool = False
     ):
         self.db_config = db_config
         self.xml_directory = xml_directory
         self.output_csv = output_csv
         self.output_xlsx = output_xlsx
         self.log_file = log_file
+        self.recursive = recursive
 
         logger_name = f"EGRNParser[{os.path.abspath(self.log_file)}]"
         self.logger = logging.getLogger(logger_name)
@@ -825,6 +827,51 @@ class EGRNParser:
             main_records = session.query(MainRecord).all()
             records_data: List[Dict[str, Any]] = []
 
+            def load_documents_json(documents_raw: Optional[str]) -> List[Dict[str, Any]]:
+                if not documents_raw:
+                    return []
+                try:
+                    documents = json.loads(documents_raw)
+                except (TypeError, json.JSONDecodeError):
+                    self.logger.warning(f"Не удалось распарсить документы: {documents_raw}")
+                    return []
+                if isinstance(documents, list):
+                    return documents
+                self.logger.warning(f"Неожиданный формат документов: {documents_raw}")
+                return []
+
+            def compute_document_fields(documents: List[Dict[str, Any]]) -> Dict[str, str]:
+                document_fields = {
+                    'Номер кредитного договора': "",
+                    'Дата кредитного договора': "",
+                    'Наличие доп. соглашения': "Нет",
+                    'Дата доп. соглашения': "",
+                }
+                for doc in documents:
+                    code = (doc.get('doc_code') or "").strip()
+                    if not code:
+                        continue
+                    if code == '558401010212':
+                        if not document_fields['Номер кредитного договора']:
+                            document_fields['Номер кредитного договора'] = doc.get('doc_number', '') or ""
+                        if not document_fields['Дата кредитного договора']:
+                            document_fields['Дата кредитного договора'] = doc.get('doc_date', '') or ""
+                    elif code == '558401010216':
+                        document_fields['Наличие доп. соглашения'] = "Да"
+                        if not document_fields['Дата доп. соглашения']:
+                            document_fields['Дата доп. соглашения'] = doc.get('doc_date', '') or ""
+                return document_fields
+
+            def merge_document_fields(target: Dict[str, str], source: Dict[str, str]) -> None:
+                if source['Номер кредитного договора'] and not target['Номер кредитного договора']:
+                    target['Номер кредитного договора'] = source['Номер кредитного договора']
+                if source['Дата кредитного договора'] and not target['Дата кредитного договора']:
+                    target['Дата кредитного договора'] = source['Дата кредитного договора']
+                if source['Наличие доп. соглашения'] == "Да":
+                    target['Наличие доп. соглашения'] = "Да"
+                    if source['Дата доп. соглашения']:
+                        target['Дата доп. соглашения'] = source['Дата доп. соглашения']
+
             def apply_restrict_fields(target: Dict[str, Any], restrict: RestrictRecord) -> None:
                 target['Признак ипотеки'] = "Да" if restrict.restriction_number else "Нет"
                 target['Номер государственной регистрации обременения / ограничения'] = restrict.restriction_number or ""
@@ -834,6 +881,13 @@ class EGRNParser:
                 target['Срок обременения / ограничения'] = restrict.end_date if restrict.end_date is not None else ""
                 target['Банк'] = restrict.bank or ""
                 target['ИНН Банка'] = restrict.bank_inn or ""
+
+                restrict_documents = load_documents_json(restrict.documents)
+                document_fields = compute_document_fields(restrict_documents)
+                target['Номер кредитного договора'] = document_fields['Номер кредитного договора']
+                target['Дата кредитного договора'] = document_fields['Дата кредитного договора']
+                target['Наличие доп. соглашения'] = document_fields['Наличие доп. соглашения']
+                target['Дата доп. соглашения'] = document_fields['Дата доп. соглашения']
 
             def match_related_restrict(document: Dict[str, Any], restricts: List[RestrictRecord]) -> Optional[RestrictRecord]:
                 for restrict in restricts:
@@ -849,6 +903,28 @@ class EGRNParser:
                 return None
 
             for main in main_records:
+                aggregated_document_fields = {
+                    'Номер кредитного договора': "",
+                    'Дата кредитного договора': "",
+                    'Наличие доп. соглашения': "Нет",
+                    'Дата доп. соглашения': "",
+                }
+
+                for restrict in main.restrict_records:
+                    restrict_documents = load_documents_json(restrict.documents)
+                    restrict_doc_fields = compute_document_fields(restrict_documents)
+                    merge_document_fields(aggregated_document_fields, restrict_doc_fields)
+
+                for deal in main.deal_records:
+                    deal_documents = load_documents_json(deal.documents)
+                    deal_doc_fields = compute_document_fields(deal_documents)
+                    merge_document_fields(aggregated_document_fields, deal_doc_fields)
+
+                for right in main.right_records:
+                    right_documents = load_documents_json(right.documents)
+                    right_doc_fields = compute_document_fields(right_documents)
+                    merge_document_fields(aggregated_document_fields, right_doc_fields)
+
                 base_record = {
                     '№': main.id,
                     'Кадастровый номер ЗУ': main.cad_number or "",
@@ -873,6 +949,10 @@ class EGRNParser:
                     'Признак ипотеки': "",
                     'Банк': "",
                     'ИНН Банка': "",
+                    'Номер кредитного договора': aggregated_document_fields['Номер кредитного договора'],
+                    'Дата кредитного договора': aggregated_document_fields['Дата кредитного договора'],
+                    'Наличие доп. соглашения': aggregated_document_fields['Наличие доп. соглашения'],
+                    'Дата доп. соглашения': aggregated_document_fields['Дата доп. соглашения'],
                     'Номер государственной регистрации обременения / ограничения': "",
                     'Дата государственной регистрации обременения / ограничения': "",
                     'Срок обременения / ограничения': "",
@@ -1010,13 +1090,9 @@ class EGRNParser:
                             records_data.append(restrict_row)
 
                 else:
-                    if main.restrict_records:
-                        for restrict in main.restrict_records:
-                            restrict_row = base_record.copy()
-                            apply_restrict_fields(restrict_row, restrict)
-                            records_data.append(restrict_row)
-                    else:
-                        records_data.append(base_record)
+                    self.logger.info(
+                        f"Запись с registration_number '{main.registration_number}' пропущена при экспорте, так как не содержит сделок ДДУ."
+                    )
 
             df = pd.DataFrame(records_data)
 
@@ -1044,6 +1120,10 @@ class EGRNParser:
                 'Признак ипотеки',
                 'Банк',
                 'ИНН Банка',
+                'Номер кредитного договора',
+                'Дата кредитного договора',
+                'Наличие доп. соглашения',
+                'Дата доп. соглашения',
                 'Номер государственной регистрации обременения / ограничения',
                 'Дата государственной регистрации обременения / ограничения',
                 'Срок обременения / ограничения',
@@ -1115,16 +1195,31 @@ class EGRNParser:
             self.logger.error(f"Указанная директория не существует: {self.xml_directory}")
             return
 
-        xml_files = [
-            os.path.join(self.xml_directory, f)
-            for f in os.listdir(self.xml_directory)
-            if f.lower().endswith('.xml')
-        ]
+        if self.recursive:
+            xml_files: List[str] = []
+            for root, _, files in os.walk(self.xml_directory):
+                for name in files:
+                    if name.lower().endswith('.xml'):
+                        xml_files.append(os.path.join(root, name))
+        else:
+            xml_files = [
+                os.path.join(self.xml_directory, f)
+                for f in os.listdir(self.xml_directory)
+                if f.lower().endswith('.xml') and os.path.isfile(os.path.join(self.xml_directory, f))
+            ]
+
+        xml_files.sort()
+
         if not xml_files:
             self.logger.warning(f"В директории {self.xml_directory} не найдено XML-файлов для обработки.")
             return
 
-        self.logger.info(f"Найдено {len(xml_files)} XML-файлов для обработки.")
+        if self.recursive:
+            self.logger.info(
+                f"Рекурсивный режим: найдено {len(xml_files)} XML-файлов для обработки в {self.xml_directory} и вложенных папках."
+            )
+        else:
+            self.logger.info(f"Найдено {len(xml_files)} XML-файлов для обработки.")
 
         session = self.Session()
         for file in xml_files:
