@@ -84,6 +84,11 @@ def parse_arguments() -> argparse.Namespace:
         action='store_true',
         help='Включить рекурсивный поиск XML в указанной директории.'
     )
+    parser.add_argument(
+        '--include_unmatched_restricts',
+        action='store_true',
+        help='Включать записи без сделок ДДУ и связанные с ними обременения.'
+    )
     return parser.parse_args()
 
 
@@ -166,7 +171,8 @@ def run_cli(args: argparse.Namespace) -> None:
             output_csv=args.output_csv,
             output_xlsx=args.output_xlsx,
             log_file=args.log_file,
-            recursive=args.recursive
+            recursive=args.recursive,
+            include_unmatched_restricts=args.include_unmatched_restricts
         )
         parser.run()
         logging.info("Парсинг завершен успешно.")

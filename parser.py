@@ -139,7 +139,8 @@ class EGRNParser:
         output_csv: str,
         output_xlsx: str,
         log_file: str = 'parser.log',
-        recursive: bool = False
+        recursive: bool = False,
+        include_unmatched_restricts: bool = False
     ):
         self.db_config = db_config
         self.xml_directory = xml_directory
@@ -147,6 +148,7 @@ class EGRNParser:
         self.output_xlsx = output_xlsx
         self.log_file = log_file
         self.recursive = recursive
+        self.include_unmatched_restricts = include_unmatched_restricts
 
         logger_name = f"EGRNParser[{os.path.abspath(self.log_file)}]"
         self.logger = logging.getLogger(logger_name)
@@ -1083,21 +1085,43 @@ class EGRNParser:
                         else:
                             records_data.append(deal_row)
 
-                    for restrict in standalone_restricts:
-                        restrict_row = base_record.copy()
-                        apply_restrict_fields(restrict_row, restrict)
-                        records_data.append(restrict_row)
-
-                    for remaining in list(restricts_by_deal.values()):
-                        for restrict in remaining:
+                    if self.include_unmatched_restricts:
+                        for restrict in standalone_restricts:
                             restrict_row = base_record.copy()
                             apply_restrict_fields(restrict_row, restrict)
                             records_data.append(restrict_row)
+                        for remaining in list(restricts_by_deal.values()):
+                            for restrict in remaining:
+                                restrict_row = base_record.copy()
+                                apply_restrict_fields(restrict_row, restrict)
+                                records_data.append(restrict_row)
+                    else:
+                        if standalone_restricts:
+                            self.logger.info(
+                                f"Найдено {len(standalone_restricts)} обременений без связи с ДДУ для registration_number "
+                                f"'{main.registration_number}'. Они исключены из отчета."
+                            )
+
+                        leftover_count = sum(len(items) for items in restricts_by_deal.values())
+                        if leftover_count:
+                            self.logger.info(
+                                f"{leftover_count} обременений с несопоставленным номером сделки по registration_number "
+                                f"'{main.registration_number}' исключены из отчета."
+                            )
 
                 else:
-                    self.logger.info(
-                        f"Запись с registration_number '{main.registration_number}' пропущена при экспорте, так как не содержит сделок ДДУ."
-                    )
+                    if self.include_unmatched_restricts:
+                        if main.restrict_records:
+                            for restrict in main.restrict_records:
+                                restrict_row = base_record.copy()
+                                apply_restrict_fields(restrict_row, restrict)
+                                records_data.append(restrict_row)
+                        else:
+                            records_data.append(base_record)
+                    else:
+                        self.logger.info(
+                            f"Запись с registration_number '{main.registration_number}' пропущена при экспорте, так как не содержит сделок ДДУ."
+                        )
 
             df = pd.DataFrame(records_data)
 
