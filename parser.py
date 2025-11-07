@@ -910,28 +910,6 @@ class EGRNParser:
                 return None
 
             for main in main_records:
-                aggregated_document_fields = {
-                    'Номер кредитного договора': "",
-                    'Дата кредитного договора': "",
-                    'Наличие доп. соглашения': "Нет",
-                    'Дата доп. соглашения': "",
-                }
-
-                for restrict in main.restrict_records:
-                    restrict_documents = load_documents_json(restrict.documents)
-                    restrict_doc_fields = compute_document_fields(restrict_documents)
-                    merge_document_fields(aggregated_document_fields, restrict_doc_fields)
-
-                for deal in main.deal_records:
-                    deal_documents = load_documents_json(deal.documents)
-                    deal_doc_fields = compute_document_fields(deal_documents)
-                    merge_document_fields(aggregated_document_fields, deal_doc_fields)
-
-                for right in main.right_records:
-                    right_documents = load_documents_json(right.documents)
-                    right_doc_fields = compute_document_fields(right_documents)
-                    merge_document_fields(aggregated_document_fields, right_doc_fields)
-
                 base_record = {
                     '№': main.id,
                     'Кадастровый номер ЗУ': main.cad_number or "",
@@ -956,10 +934,10 @@ class EGRNParser:
                     'Признак ипотеки': "",
                     'Банк': "",
                     'ИНН Банка': "",
-                    'Номер кредитного договора': aggregated_document_fields['Номер кредитного договора'],
-                    'Дата кредитного договора': aggregated_document_fields['Дата кредитного договора'],
-                    'Наличие доп. соглашения': aggregated_document_fields['Наличие доп. соглашения'],
-                    'Дата доп. соглашения': aggregated_document_fields['Дата доп. соглашения'],
+                    'Номер кредитного договора': "",
+                    'Дата кредитного договора': "",
+                    'Наличие доп. соглашения': "Нет",
+                    'Дата доп. соглашения': "",
                     'Номер государственной регистрации обременения / ограничения': "",
                     'Дата государственной регистрации обременения / ограничения': "",
                     'Срок обременения / ограничения': "",
